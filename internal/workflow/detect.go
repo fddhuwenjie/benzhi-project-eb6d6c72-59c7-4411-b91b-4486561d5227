@@ -20,6 +20,9 @@ func (s *Service) Detect(ctx context.Context, caseID string, meta WriteMeta) (*d
 	if err != nil {
 		return nil, err
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if err := requireCaseActor(c, meta.ActorID); err != nil {
 		return nil, err
 	}
