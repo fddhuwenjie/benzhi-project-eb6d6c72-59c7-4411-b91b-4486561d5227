@@ -36,7 +36,8 @@ func (d *Detector) Detect(caseID, content string) ([]domain.SensitiveFinding, er
 	cacheKey := domain.DigestString(content)
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if findings, ok := d.findingsByContent[cacheKey]; ok {
+	if cached, ok := d.findingsByContent[cacheKey]; ok {
+		findings := append([]domain.SensitiveFinding(nil), cached...)
 		for i := range findings {
 			bindFindingIdentity(&findings[i], caseID)
 		}
@@ -80,7 +81,7 @@ func (d *Detector) Detect(caseID, content string) ([]domain.SensitiveFinding, er
 		}
 		findings = append(findings, finding)
 	}
-	d.findingsByContent[cacheKey] = findings
+	d.findingsByContent[cacheKey] = append([]domain.SensitiveFinding(nil), findings...)
 	return findings, nil
 }
 
