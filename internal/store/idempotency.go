@@ -45,17 +45,31 @@ func (s *DiskStore) loadRequests() error {
 }
 
 func (s *DiskStore) persistRequests() error {
-	records := make([]RequestRecord, 0, len(s.requests))
-	for _, record := range s.requests {
-		records = append(records, record)
-	}
-	// Stable order keeps the index diffable and deterministic.
-	sortRequestRecords(records)
-	temp, err := prepareSnapshot(s.requestPath, requestIndex{DataVersion: domain.SnapshotVersion, Records: records})
+	temp, err := s.prepareRequestSnapshot(nil)
 	if err != nil {
 		return err
 	}
 	return replaceSnapshot(temp, s.requestPath)
+}
+
+// prepareRequestSnapshot encodes the idempotency index that would result from
+// appending (or replacing) the supplied record to the in-memory cache, without
+// mutating that cache. The returned path is a synced temporary file that the
+// caller must either atomically install or remove.
+func (s *DiskStore) prepareRequestSnapshot(proposed *RequestRecord) (string, error) {
+	records := make([]RequestRecord, 0, len(s.requests)+1)
+	for _, record := range s.requests {
+		if proposed != nil && record.RequestID == proposed.RequestID {
+			continue
+		}
+		records = append(records, record)
+	}
+	if proposed != nil {
+		records = append(records, *proposed)
+	}
+	// Stable order keeps the index diffable and deterministic.
+	sortRequestRecords(records)
+	return prepareSnapshot(s.requestPath, requestIndex{DataVersion: domain.SnapshotVersion, Records: records})
 }
 
 func sortRequestRecords(records []RequestRecord) {

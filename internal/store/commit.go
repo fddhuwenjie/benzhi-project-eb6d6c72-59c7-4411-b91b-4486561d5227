@@ -148,6 +148,16 @@ func (s *DiskStore) commit(ctx context.Context, commit Commit, creating bool) er
 	if err != nil {
 		return err
 	}
+	// Keep the previous case snapshot so the commit chain can restore it when a
+	// later write fails; for create there is nothing to restore.
+	var caseBackup string
+	if !creating {
+		caseBackup, err = prepareSnapshot(path, current)
+		if err != nil {
+			return fmt.Errorf("备份案件快照: %w", err)
+		}
+		defer func() { _ = os.Remove(caseBackup) }()
+	}
 	committed := false
 	defer func() {
 		if !committed {
@@ -168,23 +178,59 @@ func (s *DiskStore) commit(ctx context.Context, commit Commit, creating bool) er
 			_ = os.Truncate(s.auditPath, auditSize)
 			return fmt.Errorf("保存内容摘要索引: %w", err)
 		}
-		s.digests = nextDigests
 	}
-	committed = true
-	s.nextSeq += int64(len(preparedEvents))
+	// The idempotency index is the final member of the atomic commit chain. Its
+	// replacement must not leave the already-committed case snapshot, audit log
+	// and digest index half-advanced on failure: restore every prior artefact to
+	// its pre-call state before returning the error.
+	var proposedRecord *RequestRecord
+	var requestTemp string
 	if commit.Request != nil {
-		record := *commit.Request
-		record.Revision = commit.Case.Revision
-		record.Result, err = commit.Case.Clone()
+		proposedRecord = &RequestRecord{RequestID: commit.Request.RequestID, Operation: commit.Request.Operation,
+			CaseID: commit.Request.CaseID, Revision: commit.Case.Revision}
+		proposedRecord.Result, err = commit.Case.Clone()
 		if err != nil {
+			s.restoreCommittedState(path, caseBackup, creating, auditSize)
 			return fmt.Errorf("复制幂等结果: %w", err)
 		}
-		s.requests[record.RequestID] = record
-		if err := s.persistRequests(); err != nil {
+		requestTemp, err = s.prepareRequestSnapshot(proposedRecord)
+		if err != nil {
+			s.restoreCommittedState(path, caseBackup, creating, auditSize)
+			return fmt.Errorf("准备幂等索引: %w", err)
+		}
+		defer func() { _ = os.Remove(requestTemp) }()
+		if err := replaceSnapshot(requestTemp, s.requestPath); err != nil {
+			s.restoreCommittedState(path, caseBackup, creating, auditSize)
 			return fmt.Errorf("保存幂等索引: %w", err)
 		}
 	}
+	committed = true
+	s.nextSeq += int64(len(preparedEvents))
+	if creating {
+		s.digests = nextDigests
+	}
+	if proposedRecord != nil {
+		s.requests[proposedRecord.RequestID] = *proposedRecord
+	}
 	return nil
+}
+
+// restoreCommittedState undoes the durable writes performed before a later
+// commit step failed. It is best-effort: every artefact is restored to its
+// pre-call state so a failed request cannot expose a partially committed case
+// (incremented revision, migrated status, appended audit records). The in-memory
+// caches (s.digests, s.requests, s.nextSeq) are never updated before the whole
+// commit chain succeeds, so they already reflect the pre-call state here.
+func (s *DiskStore) restoreCommittedState(path, caseBackup string, creating bool, auditSize int64) {
+	if creating {
+		_ = os.Remove(path)
+		if restorable, err := s.prepareDigestIndex(s.digests); err == nil {
+			_ = replaceSnapshot(restorable, s.digestPath)
+		}
+	} else if caseBackup != "" {
+		_ = replaceSnapshot(caseBackup, path)
+	}
+	_ = os.Truncate(s.auditPath, auditSize)
 }
 
 func (s *DiskStore) readCaseUnlocked(path string) (*domain.DisclosureCase, error) {
