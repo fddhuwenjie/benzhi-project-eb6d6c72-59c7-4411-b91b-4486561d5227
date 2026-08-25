@@ -5,11 +5,16 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sort"
+	"sync"
 
 	"archive-review/internal/domain"
 )
 
-type Detector struct{ rules []Rule }
+type Detector struct {
+	rules             []Rule
+	mu                sync.Mutex
+	findingsByContent map[string][]domain.SensitiveFinding
+}
 
 type candidate struct {
 	start, end int
@@ -19,7 +24,7 @@ type candidate struct {
 
 func NewDetector(rules []Rule) *Detector {
 	copyRules := append([]Rule(nil), rules...)
-	return &Detector{rules: copyRules}
+	return &Detector{rules: copyRules, findingsByContent: make(map[string][]domain.SensitiveFinding)}
 }
 
 func NewDefaultDetector() *Detector { return NewDetector(DefaultRules()) }
@@ -27,6 +32,15 @@ func NewDefaultDetector() *Detector { return NewDetector(DefaultRules()) }
 func (d *Detector) Detect(caseID, content string) ([]domain.SensitiveFinding, error) {
 	if caseID == "" {
 		return nil, domain.Invalid("case_id", "案件标识不能为空")
+	}
+	cacheKey := domain.DigestString(content)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if findings, ok := d.findingsByContent[cacheKey]; ok {
+		for i := range findings {
+			bindFindingIdentity(&findings[i], caseID)
+		}
+		return findings, nil
 	}
 	candidates := make([]candidate, 0)
 	for _, rule := range d.rules {
@@ -55,17 +69,24 @@ func (d *Detector) Detect(caseID, content string) ([]domain.SensitiveFinding, er
 	for i, item := range merged {
 		item.text = content[item.start:item.end]
 		textDigest := domain.DigestString(item.text)
-		idSource := fmt.Sprintf("%s:%d:%d:%s:%s", caseID, item.start, item.end, item.rule.ID, textDigest)
-		sum := sha256.Sum256([]byte(idSource))
 		finding := domain.SensitiveFinding{
-			ID: "fnd_" + hex.EncodeToString(sum[:8]), CaseID: caseID, StartOffset: item.start, EndOffset: item.end,
+			StartOffset: item.start, EndOffset: item.end,
 			Category: item.rule.Category, MatchedTextDigest: textDigest, Confidence: item.rule.Confidence,
 			RuleID: item.rule.ID, RuleBasis: item.rule.Basis, Decision: domain.DecisionPending,
 		}
+		bindFindingIdentity(&finding, caseID)
 		if err := finding.Validate(len(content)); err != nil {
 			return nil, fmt.Errorf("检测结果 %d 无效: %w", i, err)
 		}
 		findings = append(findings, finding)
 	}
+	d.findingsByContent[cacheKey] = findings
 	return findings, nil
+}
+
+func bindFindingIdentity(finding *domain.SensitiveFinding, caseID string) {
+	idSource := fmt.Sprintf("%s:%d:%d:%s:%s", caseID, finding.StartOffset, finding.EndOffset, finding.RuleID, finding.MatchedTextDigest)
+	sum := sha256.Sum256([]byte(idSource))
+	finding.ID = "fnd_" + hex.EncodeToString(sum[:8])
+	finding.CaseID = caseID
 }
