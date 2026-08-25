@@ -24,6 +24,17 @@ func (s *DiskStore) commit(ctx context.Context, commit Commit, creating bool) er
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if commit.Request != nil {
+		if err := validateRequestRecord(*commit.Request, commit.Case); err != nil {
+			return err
+		}
+		if existing, ok := s.requests[commit.Request.RequestID]; ok {
+			if existing.Operation == commit.Request.Operation && existing.CaseID == commit.Request.CaseID {
+				return nil
+			}
+			return domain.NewError(domain.CodeAlreadyExists, "请求标识已被其他写操作使用", "request_id")
+		}
+	}
 	path := s.casePath(commit.Case.ID)
 	current, readErr := s.readCaseUnlocked(path)
 	if creating {
@@ -115,17 +126,6 @@ func (s *DiskStore) commit(ctx context.Context, commit Commit, creating bool) er
 		defer func() { _ = os.Remove(digestTemp) }()
 	} else if err := s.validateDigestLink(current); err != nil {
 		return err
-	}
-	if commit.Request != nil {
-		if err := validateRequestRecord(*commit.Request, commit.Case); err != nil {
-			return err
-		}
-		if existing, ok := s.requests[commit.Request.RequestID]; ok {
-			if existing.Operation == commit.Request.Operation && existing.CaseID == commit.Request.CaseID {
-				return nil
-			}
-			return domain.NewError(domain.CodeAlreadyExists, "请求标识已被其他写操作使用", "request_id")
-		}
 	}
 	preparedEvents := make([]domain.AuditEvent, len(commit.Events))
 	for i, event := range commit.Events {
