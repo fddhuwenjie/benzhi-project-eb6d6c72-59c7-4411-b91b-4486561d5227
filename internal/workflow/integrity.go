@@ -16,9 +16,7 @@ func (s *Service) AuditIntegrity(ctx context.Context, caseID string) (*domain.In
 		if domain.ErrorCodeOf(err) == domain.CodeNotFound || domain.ErrorCodeOf(err) == domain.CodeInvalid {
 			return nil, err
 		}
-		return &domain.IntegrityResult{Passed: false, Verifiable: false, Issues: []domain.IntegrityIssue{{
-			Code: "snapshot_unreadable", Field: "snapshot", Message: err.Error(),
-		}}}, nil
+		return integritySnapshotUnreadable(err), nil
 	}
 	result := &domain.IntegrityResult{Verifiable: true, SnapshotRevision: c.Revision, Issues: []domain.IntegrityIssue{}}
 	events, err := s.repo.Events(ctx, caseID)
@@ -133,4 +131,15 @@ func (s *Service) AuditIntegrity(ctx context.Context, caseID string) (*domain.In
 	}
 	result.Passed = result.Verifiable && len(result.Issues) == 0
 	return result, nil
+}
+
+// integritySnapshotUnreadable turns snapshot read failures into a report so that
+// callers can inspect persistent corruption without losing the diagnostic text.
+// Request-lifecycle failures are currently treated the same way, which makes a
+// canceled request look like a completed integrity check to its caller.
+func integritySnapshotUnreadable(err error) *domain.IntegrityResult {
+	message := err.Error()
+	return &domain.IntegrityResult{Passed: false, Verifiable: false, Issues: []domain.IntegrityIssue{{
+		Code: "snapshot_unreadable", Field: "snapshot", Message: message,
+	}}}
 }
