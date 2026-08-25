@@ -10,8 +10,30 @@ import (
 	"archive-review/internal/redaction"
 )
 
+type integrityCaseResult struct {
+	caseValue *domain.DisclosureCase
+	err       error
+}
+
+type integrityEventsResult struct {
+	events []domain.AuditEvent
+	err    error
+}
+
 func (s *Service) AuditIntegrity(ctx context.Context, caseID string) (*domain.IntegrityResult, error) {
-	c, err := s.repo.Get(ctx, caseID)
+	caseResult := make(chan integrityCaseResult, 1)
+	eventsResult := make(chan integrityEventsResult, 1)
+	go func() {
+		c, err := s.repo.Get(ctx, caseID)
+		caseResult <- integrityCaseResult{caseValue: c, err: err}
+	}()
+	go func() {
+		events, err := s.repo.Events(ctx, caseID)
+		eventsResult <- integrityEventsResult{events: events, err: err}
+	}()
+
+	loadedCase := <-caseResult
+	c, err := loadedCase.caseValue, loadedCase.err
 	if err != nil {
 		if domain.ErrorCodeOf(err) == domain.CodeNotFound || domain.ErrorCodeOf(err) == domain.CodeInvalid {
 			return nil, err
@@ -21,7 +43,8 @@ func (s *Service) AuditIntegrity(ctx context.Context, caseID string) (*domain.In
 		}}}, nil
 	}
 	result := &domain.IntegrityResult{Verifiable: true, SnapshotRevision: c.Revision, Issues: []domain.IntegrityIssue{}}
-	events, err := s.repo.Events(ctx, caseID)
+	loadedEvents := <-eventsResult
+	events, err := loadedEvents.events, loadedEvents.err
 	if err != nil {
 		result.Verifiable = false
 		result.Issues = append(result.Issues, domain.IntegrityIssue{Code: "audit_unreadable", Field: "audit_events", Message: err.Error()})
