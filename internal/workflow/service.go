@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"strings"
+	"sync"
 	"time"
 
 	"archive-review/internal/domain"
@@ -17,18 +18,22 @@ type Clock func() time.Time
 type IDGenerator func(string) (string, error)
 
 type Service struct {
-	repo     store.Repository
-	detector *redaction.Detector
-	clock    Clock
-	newID    IDGenerator
+	repo         store.Repository
+	detector     *redaction.Detector
+	clock        Clock
+	newID        IDGenerator
+	previewMu    sync.Mutex
+	previewCases map[string]*domain.DisclosureCase
 }
 
 func New(repo store.Repository, detector *redaction.Detector) *Service {
-	return &Service{repo: repo, detector: detector, clock: time.Now, newID: randomID}
+	return &Service{repo: repo, detector: detector, clock: time.Now, newID: randomID,
+		previewCases: make(map[string]*domain.DisclosureCase)}
 }
 
 func NewWithDependencies(repo store.Repository, detector *redaction.Detector, clock Clock, ids IDGenerator) *Service {
-	return &Service{repo: repo, detector: detector, clock: clock, newID: ids}
+	return &Service{repo: repo, detector: detector, clock: clock, newID: ids,
+		previewCases: make(map[string]*domain.DisclosureCase)}
 }
 
 func randomID(prefix string) (string, error) {

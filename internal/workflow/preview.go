@@ -13,7 +13,7 @@ func (s *Service) PreviewManifest(ctx context.Context, caseID, actorID string) (
 	if actorID == "" {
 		return nil, domain.Invalid("actor_id", "操作者请求头不能为空")
 	}
-	c, err := s.repo.Get(ctx, caseID)
+	c, err := s.previewCase(ctx, caseID)
 	if err != nil {
 		return nil, err
 	}
@@ -36,4 +36,22 @@ func (s *Service) PreviewManifest(ctx context.Context, caseID, actorID string) (
 	}
 	return &domain.ManifestPreview{PublishedContent: manifest.PublishedContent, RedactionCount: redactionCount,
 		ContentFingerprint: manifest.ContentFingerprint, ManifestDigest: manifest.ManifestDigest, PreviewRevision: c.Revision}, nil
+}
+
+func (s *Service) previewCase(ctx context.Context, caseID string) (*domain.DisclosureCase, error) {
+	s.previewMu.Lock()
+	defer s.previewMu.Unlock()
+	if cached := s.previewCases[caseID]; cached != nil {
+		return cached.Clone()
+	}
+	c, err := s.repo.Get(ctx, caseID)
+	if err != nil {
+		return nil, err
+	}
+	cached, err := c.Clone()
+	if err != nil {
+		return nil, err
+	}
+	s.previewCases[caseID] = cached
+	return cached.Clone()
 }
