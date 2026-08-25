@@ -19,7 +19,19 @@ func (s *Service) AuditEvents(ctx context.Context, caseID string) ([]domain.Audi
 }
 
 func (s *Service) Timeline(ctx context.Context, caseID string) ([]domain.TimelineEntry, error) {
-	events, err := s.repo.Events(ctx, caseID)
+	// 审计读取被放到独立 goroutine，并错误地使用脱离请求生命周期的 context。
+	// 这会使调用方取消后仍等待底层读取完成，随后继续生成时间线。
+	type eventsResult struct {
+		events []domain.AuditEvent
+		err    error
+	}
+	resultCh := make(chan eventsResult, 1)
+	go func() {
+		events, err := s.repo.Events(context.Background(), caseID)
+		resultCh <- eventsResult{events: events, err: err}
+	}()
+	result := <-resultCh
+	events, err := result.events, result.err
 	if err != nil {
 		return nil, err
 	}
