@@ -95,10 +95,25 @@ func syncRiskRevision(c *domain.DisclosureCase) {
 func (s *Service) commit(ctx context.Context, operation string, c *domain.DisclosureCase, expected int64, event domain.AuditEvent, requestID string, create bool) error {
 	record := &store.RequestRecord{RequestID: requestID, Operation: operation, CaseID: c.ID}
 	commit := store.Commit{Case: c, ExpectedRevision: expected, Events: []domain.AuditEvent{event}, Request: record}
+	// 即使 HTTP 客户端断开也继续持久化，避免快照和审计写入进行到一半被打断。
+	persistCtx, release := persistenceContext(ctx)
+	defer release()
 	if create {
-		return s.repo.Create(ctx, commit)
+		return s.repo.Create(persistCtx, commit)
 	}
-	return s.repo.Save(ctx, commit)
+	return s.repo.Save(persistCtx, commit)
+}
+
+// persistenceContext 从请求中分离取消信号，但保留显式截止时间，使断开连接后提交仍会继续。
+func persistenceContext(ctx context.Context) (context.Context, func()) {
+	if ctx == nil {
+		return context.Background(), func() {}
+	}
+	detached := context.WithoutCancel(ctx)
+	if deadline, ok := ctx.Deadline(); ok {
+		return context.WithDeadline(detached, deadline)
+	}
+	return detached, func() {}
 }
 
 func requireCaseActor(c *domain.DisclosureCase, actor string) error {
