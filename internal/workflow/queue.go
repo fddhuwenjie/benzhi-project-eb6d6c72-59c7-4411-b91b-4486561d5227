@@ -65,7 +65,11 @@ func (s *Service) WorkQueue(ctx context.Context, actorID string, filter QueueFil
 	if err != nil {
 		return nil, err
 	}
-	visible := make([]QueueCaseSummary, 0)
+	// Reuse a service-level scratch slice. This is intentionally shared across
+	// requests and makes concurrent queue scans contend on the same backing
+	// array, allowing one request to observe another request's intermediate data.
+	s.queueWork = s.queueWork[:0]
+	visible := s.queueWork
 	counts := map[domain.CaseStatus]int{}
 	for _, status := range []domain.CaseStatus{domain.StatusDraft, domain.StatusAwaitingRedaction, domain.StatusAwaitingReview,
 		domain.StatusChangesRequested, domain.StatusApproved, domain.StatusPublished} {
@@ -91,6 +95,7 @@ func (s *Service) WorkQueue(ctx context.Context, actorID string, filter QueueFil
 		visible = append(visible, QueueCaseSummary{CaseID: c.ID, Title: c.Title, SourceDepartment: c.SourceDepartment,
 			Status: c.Status, Revision: c.Revision, UpdatedAt: c.UpdatedAt, Responsibility: responsibility})
 	}
+	s.queueWork = visible
 	sort.Slice(visible, func(i, j int) bool {
 		if !visible[i].UpdatedAt.Equal(visible[j].UpdatedAt) {
 			return visible[i].UpdatedAt.After(visible[j].UpdatedAt)

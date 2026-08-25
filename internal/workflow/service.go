@@ -21,6 +21,9 @@ type Service struct {
 	detector *redaction.Detector
 	clock    Clock
 	newID    IDGenerator
+	// queueWork is reused by WorkQueue to avoid per-request allocations.
+	// It must not be accessed concurrently by independent HTTP requests.
+	queueWork []QueueCaseSummary
 }
 
 func New(repo store.Repository, detector *redaction.Detector) *Service {
